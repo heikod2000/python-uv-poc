@@ -58,9 +58,7 @@ def skip_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.server.asyncio.sleep", AsyncMock())
 
 
-def _upload(
-    file_id: str = "abc123", content: bytes = b"hello", filename: str = "test.txt", content_type: str = "text/plain"
-) -> object:
+def _upload(file_id: str = "abc123", content: bytes = b"hello", filename: str = "test.txt", content_type: str = "text/plain") -> object:
     return client.post(
         "/upload",
         data={"file_id": file_id},
