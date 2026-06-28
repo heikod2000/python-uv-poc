@@ -1,0 +1,42 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task -l
+    silent: true
+
+  update:
+    desc: update dependencies
+    silent: true
+    cmds:
+      - uv run update-packages
+      - uv sync
+
+  ruff:
+    desc: format and lint
+    silent: true
+    cmds:
+      - uv run ruff check --fix
+      - uv run ruff format
+
+  test:
+    desc: run tests
+    silent: true
+    cmds:
+      - uv run pytest
+
+  testcov:
+    desc: run tests with coverage
+    silent: true
+    cmds:
+      - uv run pytest --cov --cov-report=term-missing
+
+  # Start FastApi-Server on http://127.0.0.1:8000
+  server:
+    desc: run fastapi-server
+    silent: true
+    cmds:
+      - uv run uvicorn app.server:app --reload

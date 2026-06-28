@@ -1,1 +1,4 @@
 .idea/
+.venv/
+/CLAUDE.md
+/.coverage
