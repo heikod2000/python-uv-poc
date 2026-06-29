@@ -30,6 +30,7 @@ async def _run(
     no_proxy: list[str] | None = None,
     thumb_width: int = _DEFAULT_THUMB_WIDTH,
     thumb_dir: Path = _DEFAULT_THUMB_DIR,
+    generate_thumbs: bool = True,
 ) -> int:
     effective_proxy = _resolve_proxy(proxy)
     effective_no_proxy = _resolve_no_proxy(no_proxy)
@@ -82,7 +83,7 @@ async def _run(
             print(f"{_rel(path):<{col}} {'PASSED' if ok else 'FAILED'} {pct}  {_human_size(size):>7}  {secs:.0f}s")
             if not ok:
                 print(f"  HTTP {status}  {error_text}".rstrip())
-            else:
+            elif generate_thumbs:
                 try:
                     out_path = thumb_dir / path.relative_to(resources_dir).with_suffix(".png")
                     await asyncio.to_thread(_make_thumb, content, thumb_width, out_path)
@@ -114,12 +115,13 @@ def main() -> None:
     parser.add_argument("--no-proxy", default=None, metavar="HOSTS", help="Comma-separated list of hosts that bypass the proxy, e.g. localhost,127.0.0.1")
     parser.add_argument("--thumb-width", default=_DEFAULT_THUMB_WIDTH, type=int, metavar="PX", help=f"Width in pixels for generated PDF thumbnails (default: {_DEFAULT_THUMB_WIDTH})")
     parser.add_argument("--thumb-dir", default=_DEFAULT_THUMB_DIR, type=Path, metavar="DIR", help=f"Output directory for thumbnails (default: {_DEFAULT_THUMB_DIR})")
+    parser.add_argument("--no-thumbnails", action="store_true", default=False, help="Skip thumbnail generation")
     args = parser.parse_args()
     no_proxy = [h.strip() for h in args.no_proxy.split(",")] if args.no_proxy else None
     proxy = args.proxy or _env_proxy()
     if proxy and no_proxy is None:
         no_proxy = ["localhost", "127.0.0.1"]
-    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit, proxy, no_proxy, args.thumb_width, args.thumb_dir)))
+    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit, proxy, no_proxy, args.thumb_width, args.thumb_dir, not args.no_thumbnails)))
 
 
 if __name__ == "__main__":

@@ -563,7 +563,7 @@ def test_run_always_sets_trust_env_false(tmp_path: Path, monkeypatch: pytest.Mon
 def _make_fake_run() -> tuple[dict, object]:
     captured: dict = {}
 
-    async def fake_run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None, no_proxy: list[str] | None = None, thumb_width: int = 200, thumb_dir: Path | None = None) -> int:
+    async def fake_run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None, no_proxy: list[str] | None = None, thumb_width: int = 200, thumb_dir: Path | None = None, generate_thumbs: bool = True) -> int:
         captured.update(proxy=proxy, no_proxy=no_proxy)
         return 0
 
