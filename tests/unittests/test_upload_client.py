@@ -12,6 +12,7 @@ from app.upload_client import (
     _WIDTH,
     _header,
     _human_size,
+    _no_proxy_mount_key,
     _rel,
     _resolve_no_proxy,
     _resolve_proxy,
@@ -528,26 +529,74 @@ def test_resolve_no_proxy_empty_without_env(monkeypatch: pytest.MonkeyPatch) -> 
     assert _resolve_no_proxy(None) == []
 
 
-def test_run_uses_env_proxy_when_no_cli_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_uses_env_proxy_when_no_cli_proxy(tmp_path: Path, mock_http_client: MagicMock, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
     monkeypatch.setenv("HTTPS_PROXY", "http://env-proxy:8080")
-    constructor, _ = _make_constructor()
 
-    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
-        with patch("app.upload_client._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+    with patch("app.upload_client._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
-    _, kwargs = constructor.call_args
-    assert kwargs.get("proxy") == "http://env-proxy:8080"
+    assert "http://env-proxy:8080" in capsys.readouterr().out
 
 
-def test_run_sets_trust_env_false(tmp_path: Path) -> None:
+def test_run_sets_trust_env_false_when_cli_proxy_given(tmp_path: Path) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
     constructor, _ = _make_constructor()
 
     with patch("app.upload_client.httpx.AsyncClient", new=constructor):
         with patch("app.upload_client._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://cli-proxy:8080"))
 
     _, kwargs = constructor.call_args
     assert kwargs.get("trust_env") is False
+
+
+def test_run_does_not_set_trust_env_false_without_cli_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    constructor, _ = _make_constructor()
+
+    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
+        with patch("app.upload_client._upload", new=_fake_upload(200)):
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    _, kwargs = constructor.call_args
+    assert "trust_env" not in kwargs
+
+
+def test_run_no_proxy_without_cli_proxy_uses_mounts_not_proxy_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    constructor, _ = _make_constructor()
+
+    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
+        with patch("app.upload_client._upload", new=_fake_upload(200)):
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, no_proxy=["localhost", "127.0.0.1"]))
+
+    _, kwargs = constructor.call_args
+    assert "mounts" in kwargs
+    assert "proxy" not in kwargs
+    assert "trust_env" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# _no_proxy_mount_key
+# ---------------------------------------------------------------------------
+
+
+def test_no_proxy_mount_key_localhost() -> None:
+    assert _no_proxy_mount_key("localhost") == "all://localhost"
+
+
+def test_no_proxy_mount_key_ipv4() -> None:
+    assert _no_proxy_mount_key("127.0.0.1") == "all://127.0.0.1"
+
+
+def test_no_proxy_mount_key_domain_gets_wildcard() -> None:
+    assert _no_proxy_mount_key("example.com") == "all://*example.com"
+
+
+def test_no_proxy_mount_key_passthrough_with_scheme() -> None:
+    assert _no_proxy_mount_key("http://example.com") == "http://example.com"
