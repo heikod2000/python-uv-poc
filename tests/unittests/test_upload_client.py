@@ -319,3 +319,56 @@ def test_run_output_shows_error_label(tmp_path: Path, mock_http_client: MagicMoc
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert "ERROR" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# _run  --limit
+# ---------------------------------------------------------------------------
+
+
+def test_run_limit_restricts_file_count(tmp_path: Path, mock_http_client: MagicMock) -> None:
+    for name in ("a.pdf", "b.pdf", "c.pdf"):
+        (tmp_path / name).write_bytes(b"x")
+    found: list[Path] = []
+
+    async def capturing(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str]:
+        found.append(path)
+        return path, 200, 1, 0.1, ""
+
+    with patch("app.upload_client._upload", new=capturing):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, limit=2))
+
+    assert len(found) == 2
+
+
+def test_run_limit_clamps_to_available(tmp_path: Path, mock_http_client: MagicMock) -> None:
+    (tmp_path / "only.pdf").write_bytes(b"x")
+    found: list[Path] = []
+
+    async def capturing(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str]:
+        found.append(path)
+        return path, 200, 1, 0.1, ""
+
+    with patch("app.upload_client._upload", new=capturing):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, limit=10))
+
+    assert len(found) == 1
+
+
+def test_run_limit_output_shows_random_sample(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    for name in ("a.pdf", "b.pdf", "c.pdf"):
+        (tmp_path / name).write_bytes(b"x")
+
+    with patch("app.upload_client._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, limit=2))
+
+    assert "random sample" in capsys.readouterr().out
+
+
+def test_run_no_limit_output_does_not_show_random_sample(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+
+    with patch("app.upload_client._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    assert "random sample" not in capsys.readouterr().out

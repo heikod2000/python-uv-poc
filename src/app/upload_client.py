@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import mimetypes
+import random
 import sys
 import time
 from pathlib import Path
@@ -54,15 +55,20 @@ async def _upload(sem: asyncio.Semaphore, client: httpx.AsyncClient, path: Path)
     return path, response.status_code, len(data), elapsed, "" if ok else response.text
 
 
-async def _run(base_url: str, resources_dir: Path, concurrency: int) -> int:
-    files = sorted(f for f in resources_dir.rglob("*") if f.is_file())
+async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None) -> int:
+    all_files = sorted(f for f in resources_dir.rglob("*") if f.is_file())
+    available = len(all_files)
+    files = random.sample(all_files, min(limit, available)) if limit is not None else all_files
     total = len(files)
     col = max((len(_rel(f)) for f in files), default=40) + 2
 
     print(_header("upload session starts"))
     print(f"base url:    {base_url}")
     print(f"concurrency: {concurrency}")
-    print(f"resources:   {resources_dir}  ({total} file{'s' if total != 1 else ''})")
+    if limit is not None:
+        print(f"resources:   {resources_dir}  ({total} of {available} file{'s' if available != 1 else ''}, random sample)")
+    else:
+        print(f"resources:   {resources_dir}  ({total} file{'s' if total != 1 else ''})")
     print(f"collected {total} file{'s' if total != 1 else ''}\n")
 
     if not files:
@@ -130,8 +136,15 @@ def main() -> None:
         metavar="N",
         help=f"Max simultaneous uploads (default: {_DEFAULT_CONCURRENCY})",
     )
+    parser.add_argument(
+        "--limit",
+        default=None,
+        type=int,
+        metavar="N",
+        help="Process only N randomly selected files (default: all files)",
+    )
     args = parser.parse_args()
-    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency)))
+    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit)))
 
 
 if __name__ == "__main__":
