@@ -55,7 +55,7 @@ async def _upload(sem: asyncio.Semaphore, client: httpx.AsyncClient, path: Path)
     return path, response.status_code, len(data), elapsed, "" if ok else response.text
 
 
-async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None) -> int:
+async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None) -> int:
     all_files = sorted(f for f in resources_dir.rglob("*") if f.is_file())
     available = len(all_files)
     files = random.sample(all_files, min(limit, available)) if limit is not None else all_files
@@ -65,6 +65,8 @@ async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int 
     print(_header("upload session starts"))
     print(f"base url:    {base_url}")
     print(f"concurrency: {concurrency}")
+    if proxy:
+        print(f"proxy:       {proxy}")
     if limit is not None:
         print(f"resources:   {resources_dir}  ({total} of {available} file{'s' if available != 1 else ''}, random sample)")
     else:
@@ -78,7 +80,10 @@ async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int 
     start = time.monotonic()
     sem = asyncio.Semaphore(concurrency)
 
-    async with httpx.AsyncClient(base_url=base_url) as client:
+    client_kwargs: dict = {"base_url": base_url}
+    if proxy:
+        client_kwargs["proxy"] = proxy
+    async with httpx.AsyncClient(**client_kwargs) as client:
         outcomes = await asyncio.gather(
             *(_upload(sem, client, f) for f in files),
             return_exceptions=True,
@@ -143,8 +148,14 @@ def main() -> None:
         metavar="N",
         help="Process only N randomly selected files (default: all files)",
     )
+    parser.add_argument(
+        "--proxy",
+        default=None,
+        metavar="URL",
+        help="Proxy URL, e.g. http://proxy.example.com:8080 or socks5://localhost:1080",
+    )
     args = parser.parse_args()
-    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit)))
+    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit, args.proxy)))
 
 
 if __name__ == "__main__":

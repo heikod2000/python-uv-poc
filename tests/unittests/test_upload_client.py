@@ -372,3 +372,49 @@ def test_run_no_limit_output_does_not_show_random_sample(tmp_path: Path, mock_ht
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert "random sample" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# _run  --proxy
+# ---------------------------------------------------------------------------
+
+
+def test_run_proxy_is_passed_to_async_client(tmp_path: Path) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    client_mock = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    constructor = MagicMock(return_value=ctx)
+
+    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
+        with patch("app.upload_client._upload", new=_fake_upload(200)):
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080"))
+
+    _, kwargs = constructor.call_args
+    assert kwargs.get("proxy") == "http://proxy.example.com:8080"
+
+
+def test_run_no_proxy_does_not_pass_proxy_key(tmp_path: Path) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    client_mock = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    constructor = MagicMock(return_value=ctx)
+
+    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
+        with patch("app.upload_client._upload", new=_fake_upload(200)):
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    _, kwargs = constructor.call_args
+    assert "proxy" not in kwargs
+
+
+def test_run_proxy_shown_in_output(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+
+    with patch("app.upload_client._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080"))
+
+    assert "http://proxy.example.com:8080" in capsys.readouterr().out
