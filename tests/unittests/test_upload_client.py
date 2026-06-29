@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.upload_client import (
+from app.client.runner import (
     _DEFAULT_BASE_URL,
     _DEFAULT_CONCURRENCY,
     _WIDTH,
@@ -92,10 +92,11 @@ def test_rel_falls_back_to_absolute_outside_cwd(tmp_path: Path, monkeypatch: pyt
 # ---------------------------------------------------------------------------
 
 
-def _mock_client(status: int = 200, text: str = "") -> MagicMock:
+def _mock_client(status: int = 200, text: str = "", content: bytes = b"") -> MagicMock:
     response = MagicMock()
     response.status_code = status
     response.text = text
+    response.content = content
     client = MagicMock()
     client.post = AsyncMock(return_value=response)
     return client
@@ -132,7 +133,7 @@ def test_upload_returns_non_negative_elapsed(tmp_path: Path) -> None:
     file = tmp_path / "doc.pdf"
     file.write_bytes(b"x")
 
-    _, _, _, elapsed, _ = asyncio.run(_upload(asyncio.Semaphore(1), _mock_client(), file))
+    _, _, _, elapsed, _, _ = asyncio.run(_upload(asyncio.Semaphore(1), _mock_client(), file))
 
     assert elapsed >= 0
 
@@ -173,7 +174,7 @@ def test_upload_returns_empty_error_text_on_success(tmp_path: Path) -> None:
     file = tmp_path / "doc.pdf"
     file.write_bytes(b"x")
 
-    *_, error_text = asyncio.run(_upload(asyncio.Semaphore(1), _mock_client(200), file))
+    _, _, _, _, error_text, _ = asyncio.run(_upload(asyncio.Semaphore(1), _mock_client(200), file))
 
     assert error_text == ""
 
@@ -182,7 +183,7 @@ def test_upload_returns_error_text_on_failure(tmp_path: Path) -> None:
     file = tmp_path / "doc.pdf"
     file.write_bytes(b"x")
 
-    *_, error_text = asyncio.run(_upload(asyncio.Semaphore(1), _mock_client(422, text='{"detail": "too large"}'), file))
+    _, _, _, _, error_text, _ = asyncio.run(_upload(asyncio.Semaphore(1), _mock_client(422, text='{"detail": "too large"}'), file))
 
     assert error_text == '{"detail": "too large"}'
 
@@ -203,8 +204,8 @@ def test_upload_respects_semaphore(tmp_path: Path) -> None:
 
 
 def _fake_upload(status: int = 200, error_text: str = ""):
-    async def _inner(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str]:
-        return path, status, path.stat().st_size, 1.0, error_text if status >= 400 else ""
+    async def _inner(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str, bytes]:
+        return path, status, path.stat().st_size, 1.0, error_text if status >= 400 else "", b""
 
     return _inner
 
@@ -215,7 +216,7 @@ def mock_http_client() -> MagicMock:
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=client)
     ctx.__aexit__ = AsyncMock(return_value=None)
-    with patch("app.upload_client.httpx.AsyncClient", return_value=ctx):
+    with patch("app.client.runner.httpx.AsyncClient", return_value=ctx):
         yield client
 
 
@@ -223,7 +224,7 @@ def test_run_returns_0_when_all_pass(tmp_path: Path, mock_http_client: MagicMock
     (tmp_path / "a.pdf").write_bytes(b"x" * 10)
     (tmp_path / "b.pdf").write_bytes(b"x" * 20)
 
-    with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
         result = asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert result == 0
@@ -232,7 +233,7 @@ def test_run_returns_0_when_all_pass(tmp_path: Path, mock_http_client: MagicMock
 def test_run_returns_1_when_any_fails(tmp_path: Path, mock_http_client: MagicMock) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x" * 10)
 
-    with patch("app.upload_client._upload", new=_fake_upload(422)):
+    with patch("app.client.runner._upload", new=_fake_upload(422)):
         result = asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert result == 1
@@ -253,7 +254,7 @@ def test_run_prints_nothing_to_do_for_empty_dir(tmp_path: Path, capsys: pytest.C
 def test_run_output_shows_passed(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "file.pdf").write_bytes(b"x" * 10)
 
-    with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert "PASSED" in capsys.readouterr().out
@@ -262,7 +263,7 @@ def test_run_output_shows_passed(tmp_path: Path, mock_http_client: MagicMock, ca
 def test_run_output_shows_failed(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "file.pdf").write_bytes(b"x" * 10)
 
-    with patch("app.upload_client._upload", new=_fake_upload(422)):
+    with patch("app.client.runner._upload", new=_fake_upload(422)):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert "FAILED" in capsys.readouterr().out
@@ -271,7 +272,7 @@ def test_run_output_shows_failed(tmp_path: Path, mock_http_client: MagicMock, ca
 def test_run_output_shows_http_status_on_failure(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "file.pdf").write_bytes(b"x" * 10)
 
-    with patch("app.upload_client._upload", new=_fake_upload(422)):
+    with patch("app.client.runner._upload", new=_fake_upload(422)):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert "HTTP 422" in capsys.readouterr().out
@@ -280,7 +281,7 @@ def test_run_output_shows_http_status_on_failure(tmp_path: Path, mock_http_clien
 def test_run_output_shows_error_text_on_failure(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "file.pdf").write_bytes(b"x" * 10)
 
-    with patch("app.upload_client._upload", new=_fake_upload(422, error_text='{"detail": "File exceeds 400 KB limit"}')):
+    with patch("app.client.runner._upload", new=_fake_upload(422, error_text='{"detail": "File exceeds 400 KB limit"}')):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert '{"detail": "File exceeds 400 KB limit"}' in capsys.readouterr().out
@@ -291,11 +292,11 @@ def test_run_discovers_files_recursively(tmp_path: Path, mock_http_client: Magic
     (tmp_path / "sub" / "deep.pdf").write_bytes(b"x")
     found: list[Path] = []
 
-    async def capturing_upload(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str]:
+    async def capturing_upload(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str, bytes]:
         found.append(path)
-        return path, 200, 1, 0.1, ""
+        return path, 200, 1, 0.1, "", b""
 
-    with patch("app.upload_client._upload", new=capturing_upload):
+    with patch("app.client.runner._upload", new=capturing_upload):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert any(p.name == "deep.pdf" for p in found)
@@ -307,7 +308,7 @@ def test_run_counts_exception_as_failed(tmp_path: Path, mock_http_client: MagicM
     async def raising_upload(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float]:
         raise ConnectionError("refused")
 
-    with patch("app.upload_client._upload", new=raising_upload):
+    with patch("app.client.runner._upload", new=raising_upload):
         result = asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert result == 1
@@ -319,7 +320,7 @@ def test_run_output_shows_error_label(tmp_path: Path, mock_http_client: MagicMoc
     async def raising_upload(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float]:
         raise ConnectionError("refused")
 
-    with patch("app.upload_client._upload", new=raising_upload):
+    with patch("app.client.runner._upload", new=raising_upload):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert "ERROR" in capsys.readouterr().out
@@ -335,11 +336,11 @@ def test_run_limit_restricts_file_count(tmp_path: Path, mock_http_client: MagicM
         (tmp_path / name).write_bytes(b"x")
     found: list[Path] = []
 
-    async def capturing(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str]:
+    async def capturing(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str, bytes]:
         found.append(path)
-        return path, 200, 1, 0.1, ""
+        return path, 200, 1, 0.1, "", b""
 
-    with patch("app.upload_client._upload", new=capturing):
+    with patch("app.client.runner._upload", new=capturing):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, limit=2))
 
     assert len(found) == 2
@@ -349,11 +350,11 @@ def test_run_limit_clamps_to_available(tmp_path: Path, mock_http_client: MagicMo
     (tmp_path / "only.pdf").write_bytes(b"x")
     found: list[Path] = []
 
-    async def capturing(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str]:
+    async def capturing(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float, str, bytes]:
         found.append(path)
-        return path, 200, 1, 0.1, ""
+        return path, 200, 1, 0.1, "", b""
 
-    with patch("app.upload_client._upload", new=capturing):
+    with patch("app.client.runner._upload", new=capturing):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, limit=10))
 
     assert len(found) == 1
@@ -363,7 +364,7 @@ def test_run_limit_output_shows_random_sample(tmp_path: Path, mock_http_client: 
     for name in ("a.pdf", "b.pdf", "c.pdf"):
         (tmp_path / name).write_bytes(b"x")
 
-    with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, limit=2))
 
     assert "random sample" in capsys.readouterr().out
@@ -372,7 +373,7 @@ def test_run_limit_output_shows_random_sample(tmp_path: Path, mock_http_client: 
 def test_run_no_limit_output_does_not_show_random_sample(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
 
-    with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert "random sample" not in capsys.readouterr().out
@@ -391,8 +392,8 @@ def test_run_proxy_is_passed_to_async_client(tmp_path: Path) -> None:
     ctx.__aexit__ = AsyncMock(return_value=None)
     constructor = MagicMock(return_value=ctx)
 
-    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
-        with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
+        with patch("app.client.runner._upload", new=_fake_upload(200)):
             asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080"))
 
     _, kwargs = constructor.call_args
@@ -407,8 +408,8 @@ def test_run_no_proxy_does_not_pass_proxy_key(tmp_path: Path) -> None:
     ctx.__aexit__ = AsyncMock(return_value=None)
     constructor = MagicMock(return_value=ctx)
 
-    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
-        with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
+        with patch("app.client.runner._upload", new=_fake_upload(200)):
             asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     _, kwargs = constructor.call_args
@@ -418,7 +419,7 @@ def test_run_no_proxy_does_not_pass_proxy_key(tmp_path: Path) -> None:
 def test_run_proxy_shown_in_output(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
 
-    with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080"))
 
     assert "http://proxy.example.com:8080" in capsys.readouterr().out
@@ -441,8 +442,8 @@ def test_run_no_proxy_uses_mounts_when_proxy_set(tmp_path: Path) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
     constructor, _ = _make_constructor()
 
-    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
-        with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
+        with patch("app.client.runner._upload", new=_fake_upload(200)):
             asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost", "127.0.0.1"]))
 
     _, kwargs = constructor.call_args
@@ -454,8 +455,8 @@ def test_run_no_proxy_excludes_hosts_from_mounts(tmp_path: Path) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
     constructor, _ = _make_constructor()
 
-    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
-        with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
+        with patch("app.client.runner._upload", new=_fake_upload(200)):
             asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost", "127.0.0.1"]))
 
     _, kwargs = constructor.call_args
@@ -467,7 +468,7 @@ def test_run_no_proxy_excludes_hosts_from_mounts(tmp_path: Path) -> None:
 def test_run_no_proxy_shown_in_output(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
 
-    with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost"]))
 
     assert "localhost" in capsys.readouterr().out
@@ -534,7 +535,7 @@ def test_run_uses_env_proxy_when_no_cli_proxy(tmp_path: Path, mock_http_client: 
     (tmp_path / "a.pdf").write_bytes(b"x")
     monkeypatch.setenv("HTTPS_PROXY", "http://env-proxy:8080")
 
-    with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     assert "http://env-proxy:8080" in capsys.readouterr().out
@@ -546,8 +547,8 @@ def test_run_always_sets_trust_env_false(tmp_path: Path, monkeypatch: pytest.Mon
     (tmp_path / "a.pdf").write_bytes(b"x")
     constructor, _ = _make_constructor()
 
-    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
-        with patch("app.upload_client._upload", new=_fake_upload(200)):
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
+        with patch("app.client.runner._upload", new=_fake_upload(200)):
             asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     _, kwargs = constructor.call_args
@@ -562,7 +563,7 @@ def test_run_always_sets_trust_env_false(tmp_path: Path, monkeypatch: pytest.Mon
 def _make_fake_run() -> tuple[dict, object]:
     captured: dict = {}
 
-    async def fake_run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None, no_proxy: list[str] | None = None) -> int:
+    async def fake_run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None, no_proxy: list[str] | None = None, thumb_width: int = 200, thumb_dir: Path | None = None) -> int:
         captured.update(proxy=proxy, no_proxy=no_proxy)
         return 0
 
@@ -575,7 +576,7 @@ def test_main_auto_adds_no_proxy_for_local_hosts_when_proxy_set(monkeypatch: pyt
     captured, fake_run = _make_fake_run()
     monkeypatch.setattr(sys, "argv", ["upload-files", "--proxy", "http://proxy:8080"])
 
-    with patch("app.upload_client._run", new=fake_run):
+    with patch("app.client.runner._run", new=fake_run):
         with pytest.raises(SystemExit):
             main()
 
@@ -587,8 +588,8 @@ def test_main_env_proxy_also_triggers_auto_no_proxy(monkeypatch: pytest.MonkeyPa
     captured, fake_run = _make_fake_run()
     monkeypatch.setattr(sys, "argv", ["upload-files"])
 
-    with patch("app.upload_client._env_proxy", return_value="http://env-proxy:8080"):
-        with patch("app.upload_client._run", new=fake_run):
+    with patch("app.client.runner._env_proxy", return_value="http://env-proxy:8080"):
+        with patch("app.client.runner._run", new=fake_run):
             with pytest.raises(SystemExit):
                 main()
 
@@ -602,7 +603,7 @@ def test_main_explicit_no_proxy_overrides_auto(monkeypatch: pytest.MonkeyPatch) 
     captured, fake_run = _make_fake_run()
     monkeypatch.setattr(sys, "argv", ["upload-files", "--proxy", "http://proxy:8080", "--no-proxy", "corp.internal"])
 
-    with patch("app.upload_client._run", new=fake_run):
+    with patch("app.client.runner._run", new=fake_run):
         with pytest.raises(SystemExit):
             main()
 
@@ -615,7 +616,7 @@ def test_main_no_auto_no_proxy_without_proxy(monkeypatch: pytest.MonkeyPatch) ->
     captured, fake_run = _make_fake_run()
     monkeypatch.setattr(sys, "argv", ["upload-files"])
 
-    with patch("app.upload_client._run", new=fake_run):
+    with patch("app.client.runner._run", new=fake_run):
         with pytest.raises(SystemExit):
             main()
 

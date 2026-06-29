@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.server import _processing_semaphore, app
+from app.server.routes import _processing_semaphore
+from app.server.server import app
 
 client = TestClient(app)
 
@@ -55,7 +56,7 @@ def test_echo_missing_message_field() -> None:
 
 @pytest.fixture(autouse=True)
 def skip_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.server.asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("app.server.routes.asyncio.sleep", AsyncMock())
 
 
 def _upload(file_id: str = "abc123", content: bytes = b"hello", filename: str = "test.txt", content_type: str = "text/plain") -> object:
@@ -66,24 +67,25 @@ def _upload(file_id: str = "abc123", content: bytes = b"hello", filename: str = 
     )
 
 
-def test_upload_returns_file_id() -> None:
-    response = _upload(file_id="xyz")
+def test_upload_returns_content_bytes() -> None:
+    data = b"hello pdf content"
+    response = _upload(content=data)
 
     assert response.status_code == 200
-    assert response.json()["file_id"] == "xyz"
+    assert response.content == data
 
 
-def test_upload_returns_content_type() -> None:
+def test_upload_returns_content_type_header() -> None:
     response = _upload(content_type="application/pdf")
 
-    assert response.json()["content_type"] == "application/pdf"
+    assert "application/pdf" in response.headers["content-type"]
 
 
-def test_upload_returns_size() -> None:
+def test_upload_returns_correct_size() -> None:
     data = b"A" * 42
     response = _upload(content=data)
 
-    assert response.json()["size"] == "42"
+    assert len(response.content) == 42
 
 
 def test_upload_missing_file_id() -> None:
@@ -102,7 +104,7 @@ def test_upload_missing_file() -> None:
 
 
 def test_upload_logs_content_type_and_size(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("INFO", logger="app.server"):
+    with caplog.at_level("INFO", logger="app.server.routes"):
         _upload(content=b"X" * 10, content_type="image/png")
 
     assert "image/png" in caplog.text

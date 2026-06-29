@@ -39,4 +39,4 @@ tasks:
     desc: run fastapi-server
     silent: true
     cmds:
-      - uv run uvicorn app.server:app --reload
+      - uv run uvicorn app.server.server:app --reload
