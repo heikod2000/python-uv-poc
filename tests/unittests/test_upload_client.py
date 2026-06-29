@@ -418,3 +418,52 @@ def test_run_proxy_shown_in_output(tmp_path: Path, mock_http_client: MagicMock, 
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080"))
 
     assert "http://proxy.example.com:8080" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# _run  --no-proxy
+# ---------------------------------------------------------------------------
+
+
+def _make_constructor() -> tuple[MagicMock, MagicMock]:
+    client_mock = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    return MagicMock(return_value=ctx), client_mock
+
+
+def test_run_no_proxy_uses_mounts_when_proxy_set(tmp_path: Path) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    constructor, _ = _make_constructor()
+
+    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
+        with patch("app.upload_client._upload", new=_fake_upload(200)):
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost", "127.0.0.1"]))
+
+    _, kwargs = constructor.call_args
+    assert "mounts" in kwargs
+    assert "proxy" not in kwargs
+
+
+def test_run_no_proxy_excludes_hosts_from_mounts(tmp_path: Path) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    constructor, _ = _make_constructor()
+
+    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
+        with patch("app.upload_client._upload", new=_fake_upload(200)):
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost", "127.0.0.1"]))
+
+    _, kwargs = constructor.call_args
+    mounts: dict = kwargs["mounts"]
+    assert mounts.get("all://localhost") is None
+    assert mounts.get("all://127.0.0.1") is None
+
+
+def test_run_no_proxy_shown_in_output(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+
+    with patch("app.upload_client._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost"]))
+
+    assert "localhost" in capsys.readouterr().out

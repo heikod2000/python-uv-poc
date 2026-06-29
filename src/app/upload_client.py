@@ -55,7 +55,7 @@ async def _upload(sem: asyncio.Semaphore, client: httpx.AsyncClient, path: Path)
     return path, response.status_code, len(data), elapsed, "" if ok else response.text
 
 
-async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None) -> int:
+async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None, no_proxy: list[str] | None = None) -> int:
     all_files = sorted(f for f in resources_dir.rglob("*") if f.is_file())
     available = len(all_files)
     files = random.sample(all_files, min(limit, available)) if limit is not None else all_files
@@ -67,6 +67,8 @@ async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int 
     print(f"concurrency: {concurrency}")
     if proxy:
         print(f"proxy:       {proxy}")
+    if no_proxy:
+        print(f"no-proxy:    {', '.join(no_proxy)}")
     if limit is not None:
         print(f"resources:   {resources_dir}  ({total} of {available} file{'s' if available != 1 else ''}, random sample)")
     else:
@@ -81,7 +83,12 @@ async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int 
     sem = asyncio.Semaphore(concurrency)
 
     client_kwargs: dict = {"base_url": base_url}
-    if proxy:
+    if proxy and no_proxy:
+        client_kwargs["mounts"] = {
+            "all://": httpx.AsyncHTTPTransport(proxy=proxy),
+            **{f"all://{host}": None for host in no_proxy},
+        }
+    elif proxy:
         client_kwargs["proxy"] = proxy
     async with httpx.AsyncClient(**client_kwargs) as client:
         outcomes = await asyncio.gather(
@@ -154,8 +161,15 @@ def main() -> None:
         metavar="URL",
         help="Proxy URL, e.g. http://proxy.example.com:8080 or socks5://localhost:1080",
     )
+    parser.add_argument(
+        "--no-proxy",
+        default=None,
+        metavar="HOSTS",
+        help="Comma-separated list of hosts that bypass the proxy, e.g. localhost,127.0.0.1",
+    )
     args = parser.parse_args()
-    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit, args.proxy)))
+    no_proxy = [h.strip() for h in args.no_proxy.split(",")] if args.no_proxy else None
+    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit, args.proxy, no_proxy)))
 
 
 if __name__ == "__main__":
