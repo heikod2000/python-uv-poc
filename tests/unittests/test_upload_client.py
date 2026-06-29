@@ -13,6 +13,8 @@ from app.upload_client import (
     _header,
     _human_size,
     _rel,
+    _resolve_no_proxy,
+    _resolve_proxy,
     _run,
     _upload,
 )
@@ -467,3 +469,85 @@ def test_run_no_proxy_shown_in_output(tmp_path: Path, mock_http_client: MagicMoc
         asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost"]))
 
     assert "localhost" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# _resolve_proxy / _resolve_no_proxy  — env var support
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_proxy_returns_cli_arg_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://env-proxy:8080")
+    assert _resolve_proxy("http://cli-proxy:9090") == "http://cli-proxy:9090"
+
+
+def test_resolve_proxy_falls_back_to_https_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://env-proxy:8080")
+    assert _resolve_proxy(None) == "http://env-proxy:8080"
+
+
+def test_resolve_proxy_falls_back_to_http_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://env-proxy:8080")
+    assert _resolve_proxy(None) == "http://env-proxy:8080"
+
+
+def test_resolve_proxy_falls_back_to_all_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALL_PROXY", "socks5://env-proxy:1080")
+    assert _resolve_proxy(None) == "socks5://env-proxy:1080"
+
+
+def test_resolve_proxy_returns_none_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    assert _resolve_proxy(None) is None
+
+
+def test_resolve_no_proxy_merges_cli_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_PROXY", "internal.example.com,10.0.0.1")
+    result = _resolve_no_proxy(["localhost"])
+    assert "localhost" in result
+    assert "internal.example.com" in result
+    assert "10.0.0.1" in result
+
+
+def test_resolve_no_proxy_deduplicates(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+    result = _resolve_no_proxy(["localhost"])
+    assert result.count("localhost") == 1
+
+
+def test_resolve_no_proxy_cli_order_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_PROXY", "env-host")
+    result = _resolve_no_proxy(["cli-host"])
+    assert result.index("cli-host") < result.index("env-host")
+
+
+def test_resolve_no_proxy_empty_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    assert _resolve_no_proxy(None) == []
+
+
+def test_run_uses_env_proxy_when_no_cli_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    monkeypatch.setenv("HTTPS_PROXY", "http://env-proxy:8080")
+    constructor, _ = _make_constructor()
+
+    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
+        with patch("app.upload_client._upload", new=_fake_upload(200)):
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    _, kwargs = constructor.call_args
+    assert kwargs.get("proxy") == "http://env-proxy:8080"
+
+
+def test_run_sets_trust_env_false(tmp_path: Path) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    constructor, _ = _make_constructor()
+
+    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
+        with patch("app.upload_client._upload", new=_fake_upload(200)):
+            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    _, kwargs = constructor.call_args
+    assert kwargs.get("trust_env") is False

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import mimetypes
+import os
 import random
 import sys
 import time
@@ -16,6 +17,26 @@ _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 _DEFAULT_RESOURCES = Path(__file__).parent.parent.parent / "resources"
 _DEFAULT_CONCURRENCY = 20
 _WIDTH = 72
+_PROXY_ENV_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy")
+_NO_PROXY_ENV_VARS = ("NO_PROXY", "no_proxy")
+
+
+def _env_proxy() -> str | None:
+    return next((os.environ[v] for v in _PROXY_ENV_VARS if v in os.environ), None)
+
+
+def _env_no_proxy() -> list[str]:
+    raw = next((os.environ[v] for v in _NO_PROXY_ENV_VARS if v in os.environ), "")
+    return [h.strip() for h in raw.split(",") if h.strip()]
+
+
+def _resolve_proxy(cli_proxy: str | None) -> str | None:
+    return cli_proxy or _env_proxy()
+
+
+def _resolve_no_proxy(cli_no_proxy: list[str] | None) -> list[str]:
+    combined = (cli_no_proxy or []) + _env_no_proxy()
+    return list(dict.fromkeys(combined))
 
 
 def _header(label: str = "") -> str:
@@ -56,6 +77,9 @@ async def _upload(sem: asyncio.Semaphore, client: httpx.AsyncClient, path: Path)
 
 
 async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None, no_proxy: list[str] | None = None) -> int:
+    effective_proxy = _resolve_proxy(proxy)
+    effective_no_proxy = _resolve_no_proxy(no_proxy)
+
     all_files = sorted(f for f in resources_dir.rglob("*") if f.is_file())
     available = len(all_files)
     files = random.sample(all_files, min(limit, available)) if limit is not None else all_files
@@ -65,10 +89,10 @@ async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int 
     print(_header("upload session starts"))
     print(f"base url:    {base_url}")
     print(f"concurrency: {concurrency}")
-    if proxy:
-        print(f"proxy:       {proxy}")
-    if no_proxy:
-        print(f"no-proxy:    {', '.join(no_proxy)}")
+    if effective_proxy:
+        print(f"proxy:       {effective_proxy}")
+    if effective_no_proxy:
+        print(f"no-proxy:    {', '.join(effective_no_proxy)}")
     if limit is not None:
         print(f"resources:   {resources_dir}  ({total} of {available} file{'s' if available != 1 else ''}, random sample)")
     else:
@@ -82,14 +106,14 @@ async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int 
     start = time.monotonic()
     sem = asyncio.Semaphore(concurrency)
 
-    client_kwargs: dict = {"base_url": base_url}
-    if proxy and no_proxy:
+    client_kwargs: dict = {"base_url": base_url, "trust_env": False}
+    if effective_proxy and effective_no_proxy:
         client_kwargs["mounts"] = {
-            "all://": httpx.AsyncHTTPTransport(proxy=proxy),
-            **{f"all://{host}": None for host in no_proxy},
+            "all://": httpx.AsyncHTTPTransport(proxy=effective_proxy),
+            **{f"all://{host}": None for host in effective_no_proxy},
         }
-    elif proxy:
-        client_kwargs["proxy"] = proxy
+    elif effective_proxy:
+        client_kwargs["proxy"] = effective_proxy
     async with httpx.AsyncClient(**client_kwargs) as client:
         outcomes = await asyncio.gather(
             *(_upload(sem, client, f) for f in files),
