@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import random
 import sys
 import time
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import httpx2 as httpx
 
-from app.client._fmt import _header, _human_size, _rel, _WIDTH
+from app.client._fmt import _header, _human_size, _rel
 from app.client._proxy import _env_proxy, _resolve_no_proxy, _resolve_proxy
 from app.client._thumbnail import _DEFAULT_THUMB_DIR, _DEFAULT_THUMB_WIDTH, _make_thumb
 from app.client._uploader import _build_client_kwargs, _upload
@@ -106,22 +107,78 @@ async def _run(
 
 
 def main() -> None:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="Upload all resource files to the FastAPI /upload endpoint in parallel.")
-    parser.add_argument("--url", default=_DEFAULT_BASE_URL, metavar="URL", help=f"Base URL of the server (default: {_DEFAULT_BASE_URL})")
-    parser.add_argument("--resources", default=_DEFAULT_RESOURCES, type=Path, metavar="DIR", help=f"Directory with files to upload (default: {_DEFAULT_RESOURCES})")
-    parser.add_argument("--concurrency", default=_DEFAULT_CONCURRENCY, type=int, metavar="N", help=f"Max simultaneous uploads (default: {_DEFAULT_CONCURRENCY})")
+    parser.add_argument(
+        "--url",
+        default=os.environ.get("SERVER_URL", _DEFAULT_BASE_URL),
+        metavar="URL",
+        help=f"Base URL of the server (default: {_DEFAULT_BASE_URL}, env: SERVER_URL)",
+    )
+    parser.add_argument(
+        "--resources",
+        default=Path(os.environ.get("RESOURCES_DIR", str(_DEFAULT_RESOURCES))),
+        type=Path,
+        metavar="DIR",
+        help=f"Directory with files to upload (default: {_DEFAULT_RESOURCES}, env: RESOURCES_DIR)",
+    )
+    parser.add_argument(
+        "--concurrency",
+        default=int(os.environ.get("CONCURRENCY", str(_DEFAULT_CONCURRENCY))),
+        type=int,
+        metavar="N",
+        help=f"Max simultaneous uploads (default: {_DEFAULT_CONCURRENCY}, env: CONCURRENCY)",
+    )
     parser.add_argument("--limit", default=None, type=int, metavar="N", help="Process only N randomly selected files (default: all files)")
-    parser.add_argument("--proxy", default=None, metavar="URL", help="Proxy URL, e.g. http://proxy.example.com:8080 or socks5://localhost:1080")
-    parser.add_argument("--no-proxy", default=None, metavar="HOSTS", help="Comma-separated list of hosts that bypass the proxy, e.g. localhost,127.0.0.1")
-    parser.add_argument("--thumb-width", default=_DEFAULT_THUMB_WIDTH, type=int, metavar="PX", help=f"Width in pixels for generated PDF thumbnails (default: {_DEFAULT_THUMB_WIDTH})")
-    parser.add_argument("--thumb-dir", default=_DEFAULT_THUMB_DIR, type=Path, metavar="DIR", help=f"Output directory for thumbnails (default: {_DEFAULT_THUMB_DIR})")
-    parser.add_argument("--no-thumbnails", action="store_true", default=False, help="Skip thumbnail generation")
+    parser.add_argument(
+        "--proxy", default=None, metavar="URL", help="Proxy URL, e.g. http://proxy.example.com:8080 or socks5://localhost:1080"
+    )
+    parser.add_argument(
+        "--no-proxy", default=None, metavar="HOSTS", help="Comma-separated list of hosts that bypass the proxy, e.g. localhost,127.0.0.1"
+    )
+    parser.add_argument(
+        "--thumb-width",
+        default=int(os.environ.get("THUMB_WIDTH", str(_DEFAULT_THUMB_WIDTH))),
+        type=int,
+        metavar="PX",
+        help=f"Width in pixels for generated PDF thumbnails (default: {_DEFAULT_THUMB_WIDTH}, env: THUMB_WIDTH)",
+    )
+    parser.add_argument(
+        "--thumb-dir",
+        default=Path(os.environ.get("THUMB_DIR", str(_DEFAULT_THUMB_DIR))),
+        type=Path,
+        metavar="DIR",
+        help=f"Output directory for thumbnails (default: {_DEFAULT_THUMB_DIR}, env: THUMB_DIR)",
+    )
+    parser.add_argument(
+        "--no-thumbnails",
+        action="store_true",
+        default=os.environ.get("NO_THUMBNAILS", "").lower() in ("1", "true", "yes"),
+        help="Skip thumbnail generation (env: NO_THUMBNAILS)",
+    )
     args = parser.parse_args()
     no_proxy = [h.strip() for h in args.no_proxy.split(",")] if args.no_proxy else None
     proxy = args.proxy or _env_proxy()
     if proxy and no_proxy is None:
         no_proxy = ["localhost", "127.0.0.1"]
-    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit, proxy, no_proxy, args.thumb_width, args.thumb_dir, not args.no_thumbnails)))
+    sys.exit(
+        asyncio.run(
+            _run(
+                args.url,
+                args.resources,
+                args.concurrency,
+                args.limit,
+                proxy,
+                no_proxy,
+                args.thumb_width,
+                args.thumb_dir,
+                not args.no_thumbnails,
+            )
+        )
+    )
 
 
 if __name__ == "__main__":

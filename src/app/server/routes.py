@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from typing import Annotated
 
@@ -12,8 +13,8 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-_processing_semaphore = asyncio.Semaphore(2)
-_MAX_UPLOAD_SIZE_KB = 2000
+_processing_semaphore = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_UPLOADS", "2")))
+_MAX_UPLOAD_SIZE_KB = int(os.environ.get("MAX_UPLOAD_SIZE_KB", "2000"))
 
 
 class EchoRequest(BaseModel):

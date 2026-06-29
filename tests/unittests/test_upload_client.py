@@ -370,7 +370,9 @@ def test_run_limit_output_shows_random_sample(tmp_path: Path, mock_http_client: 
     assert "random sample" in capsys.readouterr().out
 
 
-def test_run_no_limit_output_does_not_show_random_sample(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+def test_run_no_limit_output_does_not_show_random_sample(
+    tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
 
     with patch("app.client.runner._upload", new=_fake_upload(200)):
@@ -392,9 +394,8 @@ def test_run_proxy_is_passed_to_async_client(tmp_path: Path) -> None:
     ctx.__aexit__ = AsyncMock(return_value=None)
     constructor = MagicMock(return_value=ctx)
 
-    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
-        with patch("app.client.runner._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080"))
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor), patch("app.client.runner._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080"))
 
     _, kwargs = constructor.call_args
     assert kwargs.get("proxy") == "http://proxy.example.com:8080"
@@ -408,9 +409,8 @@ def test_run_no_proxy_does_not_pass_proxy_key(tmp_path: Path) -> None:
     ctx.__aexit__ = AsyncMock(return_value=None)
     constructor = MagicMock(return_value=ctx)
 
-    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
-        with patch("app.client.runner._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor), patch("app.client.runner._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     _, kwargs = constructor.call_args
     assert "proxy" not in kwargs
@@ -442,9 +442,17 @@ def test_run_no_proxy_uses_mounts_when_proxy_set(tmp_path: Path) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
     constructor, _ = _make_constructor()
 
-    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor):  # noqa: SIM117
         with patch("app.client.runner._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost", "127.0.0.1"]))
+            asyncio.run(
+                _run(
+                    _DEFAULT_BASE_URL,
+                    tmp_path,
+                    _DEFAULT_CONCURRENCY,
+                    proxy="http://proxy.example.com:8080",
+                    no_proxy=["localhost", "127.0.0.1"],
+                )
+            )
 
     _, kwargs = constructor.call_args
     assert "mounts" in kwargs
@@ -455,9 +463,17 @@ def test_run_no_proxy_excludes_hosts_from_mounts(tmp_path: Path) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
     constructor, _ = _make_constructor()
 
-    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor):  # noqa: SIM117
         with patch("app.client.runner._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://proxy.example.com:8080", no_proxy=["localhost", "127.0.0.1"]))
+            asyncio.run(
+                _run(
+                    _DEFAULT_BASE_URL,
+                    tmp_path,
+                    _DEFAULT_CONCURRENCY,
+                    proxy="http://proxy.example.com:8080",
+                    no_proxy=["localhost", "127.0.0.1"],
+                )
+            )
 
     _, kwargs = constructor.call_args
     mounts: dict = kwargs["mounts"]
@@ -531,7 +547,9 @@ def test_resolve_no_proxy_empty_without_env(monkeypatch: pytest.MonkeyPatch) -> 
     assert _resolve_no_proxy(None) == []
 
 
-def test_run_uses_env_proxy_when_no_cli_proxy(tmp_path: Path, mock_http_client: MagicMock, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_run_uses_env_proxy_when_no_cli_proxy(
+    tmp_path: Path, mock_http_client: MagicMock, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     (tmp_path / "a.pdf").write_bytes(b"x")
     monkeypatch.setenv("HTTPS_PROXY", "http://env-proxy:8080")
 
@@ -547,9 +565,8 @@ def test_run_always_sets_trust_env_false(tmp_path: Path, monkeypatch: pytest.Mon
     (tmp_path / "a.pdf").write_bytes(b"x")
     constructor, _ = _make_constructor()
 
-    with patch("app.client.runner.httpx.AsyncClient", new=constructor):
-        with patch("app.client.runner._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor), patch("app.client.runner._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     _, kwargs = constructor.call_args
     assert kwargs.get("trust_env") is False
@@ -563,7 +580,17 @@ def test_run_always_sets_trust_env_false(tmp_path: Path, monkeypatch: pytest.Mon
 def _make_fake_run() -> tuple[dict, object]:
     captured: dict = {}
 
-    async def fake_run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None, no_proxy: list[str] | None = None, thumb_width: int = 200, thumb_dir: Path | None = None, generate_thumbs: bool = True) -> int:
+    async def fake_run(
+        base_url: str,
+        resources_dir: Path,
+        concurrency: int,
+        limit: int | None = None,
+        proxy: str | None = None,
+        no_proxy: list[str] | None = None,
+        thumb_width: int = 200,
+        thumb_dir: Path | None = None,
+        generate_thumbs: bool = True,
+    ) -> int:
         captured.update(proxy=proxy, no_proxy=no_proxy)
         return 0
 
@@ -576,9 +603,8 @@ def test_main_auto_adds_no_proxy_for_local_hosts_when_proxy_set(monkeypatch: pyt
     captured, fake_run = _make_fake_run()
     monkeypatch.setattr(sys, "argv", ["upload-files", "--proxy", "http://proxy:8080"])
 
-    with patch("app.client.runner._run", new=fake_run):
-        with pytest.raises(SystemExit):
-            main()
+    with patch("app.client.runner._run", new=fake_run), pytest.raises(SystemExit):
+        main()
 
     assert "localhost" in (captured["no_proxy"] or [])
     assert "127.0.0.1" in (captured["no_proxy"] or [])
@@ -588,10 +614,9 @@ def test_main_env_proxy_also_triggers_auto_no_proxy(monkeypatch: pytest.MonkeyPa
     captured, fake_run = _make_fake_run()
     monkeypatch.setattr(sys, "argv", ["upload-files"])
 
-    with patch("app.client.runner._env_proxy", return_value="http://env-proxy:8080"):
-        with patch("app.client.runner._run", new=fake_run):
-            with pytest.raises(SystemExit):
-                main()
+    with patch("app.client.runner._env_proxy", return_value="http://env-proxy:8080"), patch("app.client.runner._run", new=fake_run):  # noqa: SIM117
+        with pytest.raises(SystemExit):
+            main()
 
     assert "localhost" in (captured["no_proxy"] or [])
     assert "127.0.0.1" in (captured["no_proxy"] or [])
@@ -603,9 +628,8 @@ def test_main_explicit_no_proxy_overrides_auto(monkeypatch: pytest.MonkeyPatch) 
     captured, fake_run = _make_fake_run()
     monkeypatch.setattr(sys, "argv", ["upload-files", "--proxy", "http://proxy:8080", "--no-proxy", "corp.internal"])
 
-    with patch("app.client.runner._run", new=fake_run):
-        with pytest.raises(SystemExit):
-            main()
+    with patch("app.client.runner._run", new=fake_run), pytest.raises(SystemExit):
+        main()
 
     assert captured["no_proxy"] == ["corp.internal"]
 
@@ -616,8 +640,7 @@ def test_main_no_auto_no_proxy_without_proxy(monkeypatch: pytest.MonkeyPatch) ->
     captured, fake_run = _make_fake_run()
     monkeypatch.setattr(sys, "argv", ["upload-files"])
 
-    with patch("app.client.runner._run", new=fake_run):
-        with pytest.raises(SystemExit):
-            main()
+    with patch("app.client.runner._run", new=fake_run), pytest.raises(SystemExit):
+        main()
 
     assert captured["no_proxy"] is None
