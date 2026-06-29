@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import ipaddress
 import mimetypes
+import os
 import random
 import sys
 import time
 from pathlib import Path
-from urllib.request import getproxies
 
 import httpx2 as httpx
 
@@ -18,50 +17,26 @@ _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 _DEFAULT_RESOURCES = Path(__file__).parent.parent.parent / "resources"
 _DEFAULT_CONCURRENCY = 20
 _WIDTH = 72
+_PROXY_ENV_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy")
+_NO_PROXY_ENV_VARS = ("NO_PROXY", "no_proxy")
 
 
 def _env_proxy() -> str | None:
-    """Return the effective proxy URL from environment/system (including Windows Registry)."""
-    info = getproxies()
-    for scheme in ("https", "http", "all"):
-        if info.get(scheme):
-            url = info[scheme]
-            return url if "://" in url else f"http://{url}"
-    return None
+    return next((os.environ[v] for v in _PROXY_ENV_VARS if v in os.environ), None)
 
 
 def _env_no_proxy() -> list[str]:
-    """Return no-proxy hosts from environment/system (including Windows Registry)."""
-    raw = getproxies().get("no", "")
+    raw = next((os.environ[v] for v in _NO_PROXY_ENV_VARS if v in os.environ), "")
     return [h.strip() for h in raw.split(",") if h.strip()]
 
 
 def _resolve_proxy(cli_proxy: str | None) -> str | None:
-    return cli_proxy if cli_proxy is not None else _env_proxy()
+    return cli_proxy or _env_proxy()
 
 
 def _resolve_no_proxy(cli_no_proxy: list[str] | None) -> list[str]:
     combined = (cli_no_proxy or []) + _env_no_proxy()
     return list(dict.fromkeys(combined))
-
-
-def _no_proxy_mount_key(host: str) -> str:
-    """Return the httpx mount-key pattern for a no-proxy host, mirroring httpx's NO_PROXY parsing."""
-    if "://" in host:
-        return host
-    if host.lower() == "localhost":
-        return f"all://{host}"
-    try:
-        ipaddress.IPv4Address(host.split("/")[0])
-        return f"all://{host}"
-    except ValueError:
-        pass
-    try:
-        ipaddress.IPv6Address(host.split("/")[0])
-        return f"all://[{host}]"
-    except ValueError:
-        pass
-    return f"all://*{host}"
 
 
 def _header(label: str = "") -> str:
@@ -131,23 +106,14 @@ async def _run(base_url: str, resources_dir: Path, concurrency: int, limit: int 
     start = time.monotonic()
     sem = asyncio.Semaphore(concurrency)
 
-    # trust_env=False only when an explicit CLI proxy is given — otherwise let httpx read
-    # env vars and (on Windows) the system proxy registry via its own trust_env=True default.
-    client_kwargs: dict = {"base_url": base_url}
-    if proxy is not None:
-        # Explicit CLI proxy: we own the full configuration, disable auto-detection.
-        client_kwargs["trust_env"] = False
-        no_proxy_mounts = {_no_proxy_mount_key(h): None for h in effective_no_proxy}
-        if no_proxy_mounts:
-            client_kwargs["mounts"] = {"all://": httpx.AsyncHTTPTransport(proxy=proxy), **no_proxy_mounts}
-        else:
-            client_kwargs["proxy"] = proxy
-    elif no_proxy:
-        # No explicit CLI proxy, but --no-proxy specified: let httpx discover the proxy via
-        # trust_env=True (env vars + Windows Registry), and override specific hosts to go direct.
-        client_kwargs["mounts"] = {_no_proxy_mount_key(h): None for h in no_proxy}
-    # else: nothing explicit — httpx defaults (trust_env=True) handle everything.
-
+    client_kwargs: dict = {"base_url": base_url, "trust_env": False}
+    if effective_proxy and effective_no_proxy:
+        client_kwargs["mounts"] = {
+            "all://": httpx.AsyncHTTPTransport(proxy=effective_proxy),
+            **{f"all://{host}": None for host in effective_no_proxy},
+        }
+    elif effective_proxy:
+        client_kwargs["proxy"] = effective_proxy
     async with httpx.AsyncClient(**client_kwargs) as client:
         outcomes = await asyncio.gather(
             *(_upload(sem, client, f) for f in files),
@@ -227,7 +193,11 @@ def main() -> None:
     )
     args = parser.parse_args()
     no_proxy = [h.strip() for h in args.no_proxy.split(",")] if args.no_proxy else None
-    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit, args.proxy, no_proxy)))
+    # If proxy is set (via CLI or env) and no_proxy is not explicitly given, add localhost and 127.0.0.1 to bypass proxy
+    proxy = args.proxy or _env_proxy()
+    if proxy and no_proxy is None:
+        no_proxy = ["localhost", "127.0.0.1"]
+    sys.exit(asyncio.run(_run(args.url, args.resources, args.concurrency, args.limit, proxy, no_proxy)))
 
 
 if __name__ == "__main__":

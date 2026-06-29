@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,12 +13,12 @@ from app.upload_client import (
     _WIDTH,
     _header,
     _human_size,
-    _no_proxy_mount_key,
     _rel,
     _resolve_no_proxy,
     _resolve_proxy,
     _run,
     _upload,
+    main,
 )
 
 # ---------------------------------------------------------------------------
@@ -539,19 +540,7 @@ def test_run_uses_env_proxy_when_no_cli_proxy(tmp_path: Path, mock_http_client: 
     assert "http://env-proxy:8080" in capsys.readouterr().out
 
 
-def test_run_sets_trust_env_false_when_cli_proxy_given(tmp_path: Path) -> None:
-    (tmp_path / "a.pdf").write_bytes(b"x")
-    constructor, _ = _make_constructor()
-
-    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
-        with patch("app.upload_client._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, proxy="http://cli-proxy:8080"))
-
-    _, kwargs = constructor.call_args
-    assert kwargs.get("trust_env") is False
-
-
-def test_run_does_not_set_trust_env_false_without_cli_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_always_sets_trust_env_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for var in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
         monkeypatch.delenv(var, raising=False)
     (tmp_path / "a.pdf").write_bytes(b"x")
@@ -562,41 +551,72 @@ def test_run_does_not_set_trust_env_false_without_cli_proxy(tmp_path: Path, monk
             asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
 
     _, kwargs = constructor.call_args
-    assert "trust_env" not in kwargs
+    assert kwargs.get("trust_env") is False
 
 
-def test_run_no_proxy_without_cli_proxy_uses_mounts_not_proxy_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+# ---------------------------------------------------------------------------
+# main()  — auto no-proxy for local hosts
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_run() -> tuple[dict, object]:
+    captured: dict = {}
+
+    async def fake_run(base_url: str, resources_dir: Path, concurrency: int, limit: int | None = None, proxy: str | None = None, no_proxy: list[str] | None = None) -> int:
+        captured.update(proxy=proxy, no_proxy=no_proxy)
+        return 0
+
+    return captured, fake_run
+
+
+def test_main_auto_adds_no_proxy_for_local_hosts_when_proxy_set(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
         monkeypatch.delenv(var, raising=False)
-    (tmp_path / "a.pdf").write_bytes(b"x")
-    constructor, _ = _make_constructor()
+    captured, fake_run = _make_fake_run()
+    monkeypatch.setattr(sys, "argv", ["upload-files", "--proxy", "http://proxy:8080"])
 
-    with patch("app.upload_client.httpx.AsyncClient", new=constructor):
-        with patch("app.upload_client._upload", new=_fake_upload(200)):
-            asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, no_proxy=["localhost", "127.0.0.1"]))
+    with patch("app.upload_client._run", new=fake_run):
+        with pytest.raises(SystemExit):
+            main()
 
-    _, kwargs = constructor.call_args
-    assert "mounts" in kwargs
-    assert "proxy" not in kwargs
-    assert "trust_env" not in kwargs
+    assert "localhost" in (captured["no_proxy"] or [])
+    assert "127.0.0.1" in (captured["no_proxy"] or [])
 
 
-# ---------------------------------------------------------------------------
-# _no_proxy_mount_key
-# ---------------------------------------------------------------------------
+def test_main_env_proxy_also_triggers_auto_no_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured, fake_run = _make_fake_run()
+    monkeypatch.setattr(sys, "argv", ["upload-files"])
+
+    with patch("app.upload_client._env_proxy", return_value="http://env-proxy:8080"):
+        with patch("app.upload_client._run", new=fake_run):
+            with pytest.raises(SystemExit):
+                main()
+
+    assert "localhost" in (captured["no_proxy"] or [])
+    assert "127.0.0.1" in (captured["no_proxy"] or [])
 
 
-def test_no_proxy_mount_key_localhost() -> None:
-    assert _no_proxy_mount_key("localhost") == "all://localhost"
+def test_main_explicit_no_proxy_overrides_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    captured, fake_run = _make_fake_run()
+    monkeypatch.setattr(sys, "argv", ["upload-files", "--proxy", "http://proxy:8080", "--no-proxy", "corp.internal"])
+
+    with patch("app.upload_client._run", new=fake_run):
+        with pytest.raises(SystemExit):
+            main()
+
+    assert captured["no_proxy"] == ["corp.internal"]
 
 
-def test_no_proxy_mount_key_ipv4() -> None:
-    assert _no_proxy_mount_key("127.0.0.1") == "all://127.0.0.1"
+def test_main_no_auto_no_proxy_without_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    captured, fake_run = _make_fake_run()
+    monkeypatch.setattr(sys, "argv", ["upload-files"])
 
+    with patch("app.upload_client._run", new=fake_run):
+        with pytest.raises(SystemExit):
+            main()
 
-def test_no_proxy_mount_key_domain_gets_wildcard() -> None:
-    assert _no_proxy_mount_key("example.com") == "all://*example.com"
-
-
-def test_no_proxy_mount_key_passthrough_with_scheme() -> None:
-    assert _no_proxy_mount_key("http://example.com") == "http://example.com"
+    assert captured["no_proxy"] is None
