@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx2 as httpx
 
+from app.client._errors import _describe_error
 from app.client._fmt import _header, _human_size, _rel
 from app.client._proxy import _env_proxy, _resolve_no_proxy, _resolve_proxy
 from app.client._thumbnail import _DEFAULT_THUMB_DIR, _DEFAULT_THUMB_WIDTH, _make_thumb
@@ -32,6 +33,7 @@ async def _run(
     thumb_width: int = _DEFAULT_THUMB_WIDTH,
     thumb_dir: Path = _DEFAULT_THUMB_DIR,
     generate_thumbs: bool = True,
+    verify_ssl: bool = True,
 ) -> int:
     effective_proxy = _resolve_proxy(proxy)
     effective_no_proxy = _resolve_no_proxy(no_proxy)
@@ -49,6 +51,8 @@ async def _run(
         print(f"proxy:       {effective_proxy}")
     if effective_no_proxy:
         print(f"no-proxy:    {', '.join(effective_no_proxy)}")
+    if not verify_ssl:
+        print("ssl verify:  disabled")
     if limit is not None:
         print(f"resources:   {resources_dir}  ({total} of {available} file{'s' if available != 1 else ''}, random sample)")
     else:
@@ -62,7 +66,7 @@ async def _run(
     start = time.monotonic()
     sem = asyncio.Semaphore(concurrency)
 
-    client_kwargs = _build_client_kwargs(base_url, effective_proxy, effective_no_proxy)
+    client_kwargs = _build_client_kwargs(base_url, effective_proxy, effective_no_proxy, verify_ssl)
     async with httpx.AsyncClient(**client_kwargs) as client:
         outcomes = await asyncio.gather(
             *(_upload(sem, client, f) for f in files),
@@ -76,7 +80,8 @@ async def _run(
         pct = f"[{i * 100 // total:3d}%]"
         if isinstance(outcome, BaseException):
             print(f"{_rel(files[i - 1]):<{col}} ERROR  {pct}")
-            print(f"  {type(outcome).__name__}: {outcome}")
+            for line in _describe_error(outcome):
+                print(f"  {line}")
             failed += 1
         else:
             path, status, size, secs, error_text, content = outcome
@@ -159,6 +164,12 @@ def main() -> None:
         default=os.environ.get("NO_THUMBNAILS", "").lower() in ("1", "true", "yes"),
         help="Skip thumbnail generation (env: NO_THUMBNAILS)",
     )
+    parser.add_argument(
+        "--no-verify-ssl",
+        action="store_true",
+        default=os.environ.get("NO_VERIFY_SSL", "").lower() in ("1", "true", "yes"),
+        help="Disable SSL certificate validation (env: NO_VERIFY_SSL)",
+    )
     args = parser.parse_args()
     no_proxy = [h.strip() for h in args.no_proxy.split(",")] if args.no_proxy else None
     proxy = args.proxy or _env_proxy()
@@ -176,6 +187,7 @@ def main() -> None:
                 args.thumb_width,
                 args.thumb_dir,
                 not args.no_thumbnails,
+                not args.no_verify_ssl,
             )
         )
     )

@@ -24,8 +24,8 @@ async def _upload(sem: asyncio.Semaphore, client: httpx.AsyncClient, path: Path)
     return path, response.status_code, len(data), elapsed, "" if ok else response.text, response.content if ok else b""
 
 
-def _build_client_kwargs(base_url: str, effective_proxy: str | None, effective_no_proxy: list[str]) -> dict:
-    kwargs: dict = {"base_url": base_url, "trust_env": False}
+def _build_client_kwargs(base_url: str, effective_proxy: str | None, effective_no_proxy: list[str], verify_ssl: bool = True) -> dict:
+    kwargs: dict = {"base_url": base_url, "trust_env": False, "verify": verify_ssl}
     if effective_proxy and effective_no_proxy:
         kwargs["mounts"] = {
             "all://": httpx.AsyncHTTPTransport(proxy=effective_proxy),

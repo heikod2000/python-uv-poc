@@ -5,12 +5,13 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx2 as httpx
 import pytest
 
+from app.client._fmt import _WIDTH
 from app.client.runner import (
     _DEFAULT_BASE_URL,
     _DEFAULT_CONCURRENCY,
-    _WIDTH,
     _header,
     _human_size,
     _rel,
@@ -326,6 +327,33 @@ def test_run_output_shows_error_label(tmp_path: Path, mock_http_client: MagicMoc
     assert "ERROR" in capsys.readouterr().out
 
 
+def test_run_output_shows_connection_error_hint(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "file.pdf").write_bytes(b"x")
+
+    async def raising_upload(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float]:
+        raise httpx.ConnectError("boom")
+
+    with patch("app.client.runner._upload", new=raising_upload):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    assert "could not establish a connection" in capsys.readouterr().out
+
+
+def test_run_output_shows_connection_error_cause(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "file.pdf").write_bytes(b"x")
+
+    async def raising_upload(sem: asyncio.Semaphore, client: object, path: Path) -> tuple[Path, int, int, float]:
+        try:
+            raise OSError("[Errno 111] Connection refused")
+        except OSError as inner:
+            raise httpx.ConnectError("boom") from inner
+
+    with patch("app.client.runner._upload", new=raising_upload):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    assert "caused by: builtins.OSError: [Errno 111] Connection refused" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # _run  --limit
 # ---------------------------------------------------------------------------
@@ -573,6 +601,74 @@ def test_run_always_sets_trust_env_false(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 # ---------------------------------------------------------------------------
+# _run  --verify-ssl
+# ---------------------------------------------------------------------------
+
+
+def test_run_verify_ssl_defaults_to_true(tmp_path: Path) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    constructor, _ = _make_constructor()
+
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor), patch("app.client.runner._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    _, kwargs = constructor.call_args
+    assert kwargs.get("verify") is True
+
+
+def test_run_verify_ssl_false_disables_verification(tmp_path: Path) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    constructor, _ = _make_constructor()
+
+    with patch("app.client.runner.httpx.AsyncClient", new=constructor), patch("app.client.runner._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, verify_ssl=False))
+
+    _, kwargs = constructor.call_args
+    assert kwargs.get("verify") is False
+
+
+def test_run_verify_ssl_disabled_shown_in_output(tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY, verify_ssl=False))
+
+    assert "ssl verify:  disabled" in capsys.readouterr().out
+
+
+def test_run_verify_ssl_enabled_not_shown_in_output(
+    tmp_path: Path, mock_http_client: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "a.pdf").write_bytes(b"x")
+
+    with patch("app.client.runner._upload", new=_fake_upload(200)):
+        asyncio.run(_run(_DEFAULT_BASE_URL, tmp_path, _DEFAULT_CONCURRENCY))
+
+    assert "ssl verify" not in capsys.readouterr().out
+
+
+def test_main_no_verify_ssl_flag_disables_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured, fake_run = _make_fake_run()
+    monkeypatch.setattr(sys, "argv", ["upload-files", "--no-verify-ssl"])
+
+    with patch("app.client.runner._run", new=fake_run), pytest.raises(SystemExit):
+        main()
+
+    assert captured["verify_ssl"] is False
+
+
+def test_main_verify_ssl_defaults_to_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_VERIFY_SSL", raising=False)
+    captured, fake_run = _make_fake_run()
+    monkeypatch.setattr(sys, "argv", ["upload-files"])
+
+    with patch("app.client.runner._run", new=fake_run), pytest.raises(SystemExit):
+        main()
+
+    assert captured["verify_ssl"] is True
+
+
+# ---------------------------------------------------------------------------
 # main()  — auto no-proxy for local hosts
 # ---------------------------------------------------------------------------
 
@@ -590,8 +686,9 @@ def _make_fake_run() -> tuple[dict, object]:
         thumb_width: int = 200,
         thumb_dir: Path | None = None,
         generate_thumbs: bool = True,
+        verify_ssl: bool = True,
     ) -> int:
-        captured.update(proxy=proxy, no_proxy=no_proxy)
+        captured.update(proxy=proxy, no_proxy=no_proxy, verify_ssl=verify_ssl)
         return 0
 
     return captured, fake_run
